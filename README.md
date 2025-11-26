@@ -15,10 +15,15 @@ The server is capable of managing **multiple active Tic-Tac-Toe games in paralle
 ## 📁 Project Structure
 tic_tac_toe/
 │
+
 ├── game.py # Game logic (board, moves, win/draw detection)
+
 ├── game_manager.py # Managing multiple concurrent games
+
 ├── protocol.py # Communication utilities (send/recv)
+
 ├── server.py # Multi-client TCP server
+
 └── client.py # CLI client with real-time updates
 
 
