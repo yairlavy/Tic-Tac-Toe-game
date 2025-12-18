@@ -28,6 +28,10 @@ class Game:
         self.players.append((conn, symbol))
         return symbol
 
+    def all_players_joined(self):
+        """Checks if the maximum number of players has joined the game."""
+        return len(self.players) == self.max_players
+
     def current_symbol(self):
         """Returns the symbol of the player whose turn it is."""
         if not self.players:
