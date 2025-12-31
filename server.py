@@ -13,6 +13,7 @@ HOST = '127.0.0.1'
 PORT = 5000
 FORMAT = 'utf-8'
 ADDR = (HOST, PORT)
+MESSAGE_DELIMITER = '\n<END>\n'
 
 # Game state storage
 games = {}  # {game_id: Game object}
@@ -177,11 +178,12 @@ class Game:
 
 
 def send_message(conn, message):
-    """Send a message to a client"""
+    """Send a message to a client with delimiter"""
     try:
         if isinstance(message, dict):
             message = json.dumps(message)
-        conn.send(message.encode(FORMAT))
+        message_with_delimiter = message + MESSAGE_DELIMITER
+        conn.send(message_with_delimiter.encode(FORMAT))
         return True
     except:
         return False
@@ -192,6 +194,9 @@ def receive_message(conn):
     try:
         data = conn.recv(4096).decode(FORMAT)
         if data:
+            # Handle delimiter - take first complete message
+            if MESSAGE_DELIMITER in data:
+                data = data.split(MESSAGE_DELIMITER)[0]
             try:
                 return json.loads(data)
             except:
