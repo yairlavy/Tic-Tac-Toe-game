@@ -13,6 +13,7 @@ HOST = '127.0.0.1'
 PORT = 5000
 FORMAT = 'utf-8'
 ADDR = (HOST, PORT)
+MESSAGE_DELIMITER = '\n<END>\n'
 
 
 class TicTacToeClient:
@@ -24,6 +25,7 @@ class TicTacToeClient:
         self.player_name = ""
         self.in_game = False
         self.my_symbol = ""
+        self.buffer = ""  # Buffer for incomplete messages
     
     def connect(self):
         """Connect to the server"""
@@ -42,7 +44,8 @@ class TicTacToeClient:
         try:
             if isinstance(message, dict):
                 message = json.dumps(message)
-            self.client_socket.send(message.encode(FORMAT))
+            message_with_delimiter = message + MESSAGE_DELIMITER
+            self.client_socket.send(message_with_delimiter.encode(FORMAT))
             return True
         except Exception as e:
             print(f"[ERROR] Failed to send message: {e}")
@@ -53,10 +56,21 @@ class TicTacToeClient:
         try:
             data = self.client_socket.recv(4096).decode(FORMAT)
             if data:
-                try:
-                    return json.loads(data)
-                except:
-                    return {'type': 'text', 'message': data}
+                self.buffer += data
+                
+                # Check if we have a complete message
+                if MESSAGE_DELIMITER in self.buffer:
+                    parts = self.buffer.split(MESSAGE_DELIMITER, 1)
+                    message = parts[0]
+                    self.buffer = parts[1] if len(parts) > 1 else ""
+                    
+                    try:
+                        return json.loads(message)
+                    except:
+                        return {'type': 'text', 'message': message}
+                else:
+                    # No complete message yet, try to receive more
+                    return self.receive_message()
             return None
         except Exception as e:
             return None
