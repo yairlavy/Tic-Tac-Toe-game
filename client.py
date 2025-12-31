@@ -1,267 +1,358 @@
-# client.py
 """
-Tic-Tac-Toe game client with interactive menu interface.
-Connects to server, displays game board, and handles user input.
+Tic-Tac-Toe Game Client 
+Client application for connecting to the game server
 """
+
 import socket
+import json
 import threading
-from protocol import send, recv_line
+import time
 
-current_board = []
-my_symbol = None
-game_started = False
+# Client Configuration
+HOST = '127.0.0.1'
+PORT = 5000
+FORMAT = 'utf-8'
+ADDR = (HOST, PORT)
 
-print_lock = threading.Lock()
 
-
-# ---------------------------------------------------------
-#               BEAUTIFUL SCALABLE BOARD
-# ---------------------------------------------------------
-def print_board():
-    """
-    Prints the game board in a formatted grid layout.
-    Dynamically adjusts to any board size (3x3, 4x4, 5x5, etc.)
-    """
-    with print_lock:
-        if not current_board:
-            print("No board available yet.")
-            return
-
-        size = len(current_board)
-
-        # Column header with proper spacing
-        print("\n      ", end="")
-        for i in range(size):
-            print(f"{i:^5}", end="")
-        print()
-
-        # Top border
-        print("    +" + "-----+" * size)
-
-        # Print each row
-        for i, row in enumerate(current_board):
-            # Row content with centered cells
-            print(f"  {i} |", end="")
-            for cell in row:
-                # Center each cell content in a 5-character space
-                print(f"{cell:^5}|", end="")
-            print()
+class TicTacToeClient:
+    """Client class for Tic-Tac-Toe game"""
+    
+    def __init__(self):
+        self.client_socket = None
+        self.connected = False
+        self.player_name = ""
+        self.in_game = False
+        self.my_symbol = ""
+    
+    def connect(self):
+        """Connect to the server"""
+        try:
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect(ADDR)
+            self.connected = True
+            print(f"[CONNECTED] Connected to server at {HOST}:{PORT}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Could not connect to server: {e}")
+            return False
+    
+    def send_message(self, message):
+        """Send a message to the server"""
+        try:
+            if isinstance(message, dict):
+                message = json.dumps(message)
+            self.client_socket.send(message.encode(FORMAT))
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to send message: {e}")
+            return False
+    
+    def receive_message(self):
+        """Receive a message from the server"""
+        try:
+            data = self.client_socket.recv(4096).decode(FORMAT)
+            if data:
+                try:
+                    return json.loads(data)
+                except:
+                    return {'type': 'text', 'message': data}
+            return None
+        except Exception as e:
+            return None
+    
+    def display_board(self, board_str):
+        """Display the game board"""
+        print("\n" + "="*50)
+        print(board_str)
+        print("="*50)
+    
+    def display_game_info(self, state):
+        """Display game information"""
+        print(f"\n[GAME INFO]")
+        print(f"Players: {', '.join([f'{name} ({symbol})' for name, symbol in state['players']])}")
+        if state['game_over']:
+            print("[STATUS] Game Over!")
+        elif not state['game_started']:
+            print("[STATUS] Waiting for players...")
+        else:
+            current_player = state['players'][state['current_player']]
+            print(f"[CURRENT TURN] {current_player[0]} ({current_player[1]})")
+    
+    def handle_menu(self):
+        """Handle the main menu"""
+        while self.connected and not self.in_game:
+            response = self.receive_message()
             
-            # Horizontal separator between rows
-            print("    +" + "-----+" * size)
-
-        print()  # spacing
-
-
-# ---------------------------------------------------------
-#                       MENU
-# ---------------------------------------------------------
-def print_menu():
-    """Displays the main game menu with current player symbol."""
-    with print_lock:
-        print("\n================ GAME MENU ================")
-        print(f"Your symbol: {my_symbol if my_symbol else 'None'}")
-        print("1. List available games")
-        print("2. Create a new game")
-        print("3. Join a game")
-        print("4. Show current board")
-        print("5. Make a move")
-        print("6. Quit")
-        print("===========================================")
-
-
-def parse_board_lines(lines):
-    """
-    Parses board data received from server into 2D list.
-    
-    Args:
-        lines: List of strings containing pipe-separated cell values
-        
-    Returns:
-        2D list representing the game board
-    """
-    board = []
-    for line in lines:
-        row = [c for c in line.split("|")]
-        row = [c.strip() for c in row]
-        board.append(row)
-    return board
-
-
-# ---------------------------------------------------------
-#              SERVER LISTENING THREAD
-# ---------------------------------------------------------
-def listen_to_server(conn):
-    """
-    Background thread that continuously listens for server messages.
-    Handles board updates, game state changes, and notifications.
-    
-    Args:
-        conn: Socket connection to the server
-    """
-    global current_board, my_symbol, game_started
-
-    buffer = []
-    reading_board = False
-
-    while True:
-        msg = recv_line(conn)
-        if msg is None:
-            with print_lock:
-                print("\n[SERVER DISCONNECTED]")
-            break
-
-        # Capture board lines
-        if "|" in msg and not msg.startswith("["):
-            reading_board = True
-            buffer.append(msg)
-            continue
-
-        # Board is finished
-        if reading_board:
-            current_board = parse_board_lines(buffer)
-            buffer = []
-            reading_board = False
-            print_board()
-            print_menu()
-            continue
-
-        # -------------------------------------------------
-        #           INTERPRETED SERVER RESPONSES
-        # -------------------------------------------------
-
-        if msg.startswith("WELCOME"):
-            with print_lock:
-                print("[Connected to server]")
-
-        elif msg.startswith("GAME_CREATED"):
-            parts = msg.split()
-            game_id = parts[1]
-            my_symbol = parts[-1]
-            with print_lock:
-                print(f"\n[Game created successfully]")
-                print(f"[Game ID]: {game_id}")
-                print(f"[Your symbol]: {my_symbol}")
-
-        elif msg.startswith("JOIN_OK"):
-            parts = msg.split()
-            my_symbol = parts[-1]
-            with print_lock:
-                print(f"\n[Joined game successfully]")
-                print(f"[Your symbol]: {my_symbol}")
-
-        elif msg.startswith("GAME_START"):
-            game_started = True
-            with print_lock:
-                print("\n[The game has started! Waiting for board...]")
-
-        elif msg.startswith("TURN"):
-            parts = msg.split()
-            turn_symbol = parts[1]
-            with print_lock:
-                if turn_symbol == my_symbol:
-                    print(f"\n>>> YOUR TURN ({my_symbol}) <<<")
+            if response is None:
+                print("[ERROR] Lost connection to server")
+                self.connected = False
+                break
+            
+            msg_type = response.get('type', '') if isinstance(response, dict) else ''
+            
+            if msg_type == 'request_name':
+                # Server asking for name
+                self.player_name = input("Enter your name: ").strip()
+                if not self.player_name:
+                    self.player_name = "Player"
+                self.send_message({'name': self.player_name})
+                
+            elif msg_type == 'menu':
+                # Display menu and get choice
+                print("\n" + "="*50)
+                print(response['message'])
+                print("="*50)
+                choice = input("Your choice: ").strip()
+                
+                if choice == '1':
+                    self.send_message({'action': 'create'})
+                    self.handle_create_game()
+                elif choice == '2':
+                    self.send_message({'action': 'list'})
+                elif choice == '3':
+                    self.send_message({'action': 'join'})
+                    self.handle_join_game()
+                elif choice == '4':
+                    self.send_message({'action': 'exit'})
+                    self.connected = False
+                    break
                 else:
-                    print(f"\n[Waiting for player {turn_symbol} to move...]")
-
-        elif msg.startswith("GAME_OVER"):
-            with print_lock:
-                print("\n============== GAME OVER ==============")
-                print(msg)
-                print("=======================================")
-                game_started = False  # Reset game state
-
-        elif msg.startswith("INVALID_MOVE"):
-            with print_lock:
-                print("\n[Invalid move — Choose another position]")
-
-        elif msg.startswith("ERROR"):
-            with print_lock:
-                print("\n[SERVER ERROR]:", msg)
-
-        elif msg.startswith("NO_GAMES"):
-            with print_lock:
-                print("\n[No available games]")
-
-        elif msg.startswith("GAME"):
-            with print_lock:
-                print("[Available game]:", msg)
-
-        elif msg.startswith("END_LIST"):
-            with print_lock:
-                print("[End of list]")
-
-        else:
-            with print_lock:
-                print("[SERVER]:", msg)
-
-
-# ---------------------------------------------------------
-#                     MAIN LOOP
-# ---------------------------------------------------------
-def main():
-    """
-    Main client loop. Connects to server, starts listener thread,
-    and processes user menu selections.
-    """
-    global current_board, game_started
-
-    # Connect to server
-    conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        conn.connect(("127.0.0.1", 5000))
-        print("Connected to server.")
-    except ConnectionRefusedError:
-        print("ERROR: Could not connect to server. Is the server running?")
-        return
-
-    # Background listener thread
-    threading.Thread(target=listen_to_server, args=(conn,), daemon=True).start()
-
-    # Main menu loop
-    while True:
-        print_menu()
-        choice = input("Choose (1-6): ").strip()
-
-        if choice == "1":
-            # List all available games
-            send(conn, "LIST")
-
-        elif choice == "2":
-            # Create a new game
-            p = input("How many players? (2, 3, 4...): ").strip()
-            send(conn, f"CREATE {p}")
-
-        elif choice == "3":
-            # Join an existing game
-            gid = input("Enter game ID: ").strip()
-            send(conn, f"JOIN {gid}")
-
-        elif choice == "4":
-            # Display current board
-            print_board()
-
-        elif choice == "5":
-            # Make a move
-            if not game_started:
-                print("\n[Game not started yet!]")
+                    print("[ERROR] Invalid choice")
+                    self.send_message({'action': 'menu'})
+            
+            elif msg_type == 'game_list':
+                # Display available games
+                games = response['games']
+                print("\n" + "="*50)
+                print("Available Games:")
+                if not games:
+                    print("No games available. Create a new one!")
+                else:
+                    print(f"{'ID':<6} {'Creator':<15} {'Players':<10} {'Board':<10}")
+                    print("-" * 50)
+                    for game in games:
+                        print(f"{game['game_id']:<6} {game['creator']:<15} {game['players']:<10} {game['board_size']:<10}")
+                print("="*50)
+            
+            elif msg_type == 'error':
+                print(f"[ERROR] {response['message']}")
+            
+            elif msg_type == 'goodbye':
+                print(response['message'])
+                self.connected = False
+                break
+            
+            elif msg_type == 'text':
+                # Handle plain text messages
+                print(response.get('message', ''))
+    
+    def handle_create_game(self):
+        """Handle game creation"""
+        response = self.receive_message()
+        
+        if response and response.get('type') == 'request_players':
+            print(response['message'])
+            num_players = input("Number of players: ").strip()
+            
+            try:
+                num_players = int(num_players)
+                if num_players < 2 or num_players > 8:
+                    print("[ERROR] Number must be between 2 and 8")
+                    return
+            except:
+                print("[ERROR] Invalid number")
+                return
+            
+            self.send_message({'num_players': num_players})
+            
+            # Wait for game creation confirmation
+            response = self.receive_message()
+            if response and response.get('type') == 'game_created':
+                self.my_symbol = response['symbol']
+                print(f"\n[SUCCESS] {response['message']}")
+                print(f"Your symbol: {self.my_symbol}")
+                self.in_game = True
+                self.handle_gameplay()
+    
+    def handle_join_game(self):
+        """Handle joining a game"""
+        response = self.receive_message()
+        
+        if response and response.get('type') == 'request_game_id':
+            print(response['message'])
+            game_id = input("Game ID: ").strip()
+            
+            try:
+                game_id = int(game_id)
+            except:
+                print("[ERROR] Invalid game ID")
+                return
+            
+            self.send_message({'game_id': game_id})
+            
+            # Wait for join confirmation or error
+            response = self.receive_message()
+            if response:
+                if response.get('type') == 'game_joined':
+                    self.my_symbol = response['symbol']
+                    print(f"\n[SUCCESS] {response['message']}")
+                    self.in_game = True
+                    self.handle_gameplay()
+                elif response.get('type') == 'error':
+                    print(f"[ERROR] {response['message']}")
+    
+    def handle_gameplay(self):
+        """Handle the actual gameplay"""
+        print("\n[GAME] Waiting for game to start...")
+        
+        game_over = False
+        
+        while self.in_game and not game_over and self.connected:
+            response = self.receive_message()
+            
+            if response is None:
+                print("[ERROR] Lost connection during game")
+                self.connected = False
+                break
+            
+            # Ensure response is a dictionary
+            if not isinstance(response, dict):
                 continue
+            
+            msg_type = response.get('type', '')
+            
+            if msg_type == 'player_joined':
+                print(f"\n[INFO] {response['message']}")
+            
+            elif msg_type == 'game_start':
+                print(f"\n[GAME] {response['message']}")
+            
+            elif msg_type == 'game_state':
+                # Display game state
+                state = response['state']
+                self.display_board(state['board_str'])
+                self.display_game_info(state)
+                
+                if response.get('your_turn'):
+                    print(f"\n[YOUR TURN] You are {self.my_symbol}")
+                    
+                    # Get player's move
+                    move_made = False
+                    while not move_made and self.connected:
+                        try:
+                            position = input("Enter position (number on board): ").strip()
+                            position = int(position)
+                            
+                            # Send move to server
+                            if self.send_message({
+                                'type': 'move',
+                                'position': position
+                            }):
+                                # Wait for response (either success with new state or error)
+                                move_response = self.receive_message()
+                                
+                                if move_response:
+                                    if move_response.get('type') == 'error':
+                                        # Invalid move, try again
+                                        print(f"[ERROR] {move_response['message']}")
+                                        print("Please try again.")
+                                        continue
+                                    else:
+                                        # Valid move, exit loop and wait for next state
+                                        move_made = True
+                                        # Put the response back in the queue by handling it
+                                        if move_response.get('type') == 'game_state':
+                                            state = move_response['state']
+                                            self.display_board(state['board_str'])
+                                            self.display_game_info(state)
+                                            if not state['game_over']:
+                                                current_player = state['players'][state['current_player']]
+                                                print(f"\n[WAITING] Waiting for {current_player[0]}'s move...")
+                                        elif move_response.get('type') == 'game_end':
+                                            # Game ended with this move
+                                            print("\n" + "="*50)
+                                            if move_response['result'] == 'win':
+                                                winner = move_response['winner']
+                                                if winner == self.player_name:
+                                                    print("🎉 CONGRATULATIONS! YOU WON! 🎉")
+                                                else:
+                                                    print(f"Game Over! {winner} won!")
+                                            elif move_response['result'] == 'draw':
+                                                print("Game Over! It's a draw!")
+                                            print("="*50)
+                                            game_over = True
+                                            self.in_game = False
+                                            self.connected = False
+                                            return
+                                break
+                            else:
+                                break
+                        except ValueError:
+                            print("[ERROR] Please enter a valid number")
+                        except KeyboardInterrupt:
+                            print("\n[EXITING] Closing connection...")
+                            self.connected = False
+                            self.in_game = False
+                            return
+                        except Exception as e:
+                            print(f"[ERROR] {e}")
+                            break
+                else:
+                    if state['game_started'] and not state['game_over']:
+                        current_player = state['players'][state['current_player']]
+                        print(f"\n[WAITING] Waiting for {current_player[0]}'s move...")
+            
+            elif msg_type == 'game_end':
+                # Game ended - try to get final board state
+                print("\n" + "="*50)
+                if response['result'] == 'win':
+                    winner = response['winner']
+                    if winner == self.player_name:
+                        print("🎉 CONGRATULATIONS! YOU WON! 🎉")
+                    else:
+                        print(f"Game Over! {winner} won!")
+                elif response['result'] == 'draw':
+                    print("Game Over! It's a draw!")
+                print("="*50)
+                
+                game_over = True
+                self.in_game = False
+                self.connected = False  # Exit after game ends
+            
+            elif msg_type == 'error':
+                print(f"[ERROR] {response['message']}")
+            
+            elif msg_type == 'text':
+                # Handle any plain text messages
+                print(response.get('message', ''))
+    
+    def start(self):
+        """Start the client"""
+        if self.connect():
+            try:
+                self.handle_menu()
+            except KeyboardInterrupt:
+                print("\n[EXITING] Closing connection...")
+            except Exception as e:
+                print(f"[ERROR] Unexpected error: {e}")
+            finally:
+                if self.client_socket:
+                    try:
+                        self.client_socket.close()
+                    except:
+                        pass
+                print("[DISCONNECTED] Goodbye!")
 
-            print("\nEnter your move:")
-            r = input("Row: ").strip()
-            c = input("Col: ").strip()
-            send(conn, f"MOVE {r} {c}")
 
-        elif choice == "6":
-            # Quit game
-            print("Goodbye!")
-            send(conn, "QUIT")
-            break
-
-        else:
-            print("Invalid option.")
-
-    conn.close()
+def main():
+    """Main function"""
+    print("="*50)
+    print("  TIC-TAC-TOE GAME CLIENT")
+    print("="*50)
+    
+    client = TicTacToeClient()
+    client.start()
 
 
 if __name__ == "__main__":
