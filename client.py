@@ -302,10 +302,10 @@ class TicTacToeClient:
                                                 winner_symbol = move_response.get('winner_symbol')
                                                 winner_name = move_response['winner']
                                                 if winner_symbol == self.my_symbol:
-                                                    print("🎉 CONGRATULATIONS! YOU WON! 🎉")
+                                                    print("CONGRATULATIONS! YOU WON!")
                                                     print(f"Winner: {winner_name} ({winner_symbol})")
                                                 else:
-                                                    print(f"😢 YOU LOST!")
+                                                    print(f"YOU LOST!")
                                                     print(f"Winner: {winner_name} ({winner_symbol})")
                                             elif move_response['result'] == 'draw':
                                                 print("Game Over! It's a draw!")
@@ -343,10 +343,10 @@ class TicTacToeClient:
                     winner_symbol = response.get('winner_symbol')
                     winner_name = response['winner']
                     if winner_symbol == self.my_symbol:
-                        print("🎉 CONGRATULATIONS! YOU WON! 🎉")
+                        print("CONGRATULATIONS! YOU WON!")
                         print(f"Winner: {winner_name} ({winner_symbol})")
                     else:
-                        print(f"😢 YOU LOST!")
+                        print(f"YOU LOST!")
                         print(f"Winner: {winner_name} ({winner_symbol})")
                 elif response['result'] == 'draw':
                     print("Game Over! It's a draw!")
