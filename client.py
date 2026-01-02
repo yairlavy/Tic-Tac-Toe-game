@@ -163,58 +163,68 @@ class TicTacToeClient:
     
     def handle_create_game(self):
         """Handle game creation"""
-        response = self.receive_message()
-        
-        if response and response.get('type') == 'request_players':
-            print(response['message'])
-            num_players = input("Number of players: ").strip()
-            
-            try:
-                num_players = int(num_players)
-                if num_players < 2 or num_players > 8:
-                    print("[ERROR] Number must be between 2 and 8")
-                    return
-            except:
-                print("[ERROR] Invalid number")
-                return
-            
-            self.send_message({'num_players': num_players})
-            
-            # Wait for game creation confirmation
+        # Loop until valid number of players is entered
+        while True:
             response = self.receive_message()
-            if response and response.get('type') == 'game_created':
-                self.my_symbol = response['symbol']
-                print(f"\n[SUCCESS] {response['message']}")
-                print(f"Your symbol: {self.my_symbol}")
-                self.in_game = True
-                self.handle_gameplay()
+            
+            if response and response.get('type') == 'request_players':
+                print(response['message'])
+                num_players = input("Number of players: ").strip()
+                
+                try:
+                    num_players = int(num_players)
+                    if num_players < 2 or num_players > 8:
+                        print("[ERROR] Number must be between 2 and 8")
+                        self.send_message({'num_players': -1})  # Send invalid to get asked again
+                        continue  # Ask again
+                except:
+                    print("[ERROR] Invalid number")
+                    self.send_message({'num_players': -1})  # Send invalid to get asked again
+                    continue  # Ask again
+                
+                self.send_message({'num_players': num_players})
+                break  # Valid input, exit loop
+        
+        # Wait for game creation confirmation
+        response = self.receive_message()
+        if response and response.get('type') == 'game_created':
+            self.my_symbol = response['symbol']
+            print(f"\n[SUCCESS] {response['message']}")
+            print(f"Your symbol: {self.my_symbol}")
+            self.in_game = True
+            self.handle_gameplay()
     
     def handle_join_game(self):
         """Handle joining a game"""
-        response = self.receive_message()
-        
-        if response and response.get('type') == 'request_game_id':
-            print(response['message'])
-            game_id = input("Game ID: ").strip()
-            
-            try:
-                game_id = int(game_id)
-            except:
-                print("[ERROR] Invalid game ID")
-                return
-            
-            self.send_message({'game_id': game_id})
-            
-            # Wait for join confirmation or error
+        # Loop until valid game is joined
+        while True:
             response = self.receive_message()
-            if response:
-                if response.get('type') == 'game_joined':
-                    self.my_symbol = response['symbol']
-                    print(f"\n[SUCCESS] {response['message']}")
-                    self.in_game = True
-                    self.handle_gameplay()
-                elif response.get('type') == 'error':
-                    print(f"[ERROR] {response['message']}")
+            
+            if response and response.get('type') == 'request_game_id':
+                print(response['message'])
+                game_id = input("Game ID: ").strip()
+                
+                try:
+                    game_id = int(game_id)
+                except:
+                    print("[ERROR] Invalid game ID")
+                    self.send_message({'game_id': -1})  # Send invalid to get asked again
+                    continue  # Ask again
+                
+                self.send_message({'game_id': game_id})
+                
+                # Wait for join confirmation or error
+                response = self.receive_message()
+                if response:
+                    if response.get('type') == 'game_joined':
+                        self.my_symbol = response['symbol']
+                        print(f"\n[SUCCESS] {response['message']}")
+                        self.in_game = True
+                        self.handle_gameplay()
+                        break  # Successfully joined, exit loop
+                    elif response.get('type') == 'error':
+                        print(f"[ERROR] {response['message']}")
+                        # Continue loop to ask again
     
     def handle_gameplay(self):
         """Handle the actual gameplay"""
@@ -251,7 +261,7 @@ class TicTacToeClient:
                 if response.get('your_turn'):
                     print(f"\n[YOUR TURN] You are {self.my_symbol}")
                     
-                    # Get player's move
+                    # Get player's move - loop until valid move
                     move_made = False
                     while not move_made and self.connected:
                         try:
@@ -263,19 +273,21 @@ class TicTacToeClient:
                                 'type': 'move',
                                 'position': position
                             }):
-                                # Wait for response (either success with new state or error)
+                                # Wait for server response
                                 move_response = self.receive_message()
                                 
                                 if move_response:
                                     if move_response.get('type') == 'error':
-                                        # Invalid move, try again
+                                        # Invalid move, show error and try again
                                         print(f"[ERROR] {move_response['message']}")
                                         print("Please try again.")
+                                        # Continue loop to ask for input again
                                         continue
                                     else:
-                                        # Valid move, exit loop and wait for next state
+                                        # Valid move accepted, exit input loop
                                         move_made = True
-                                        # Put the response back in the queue by handling it
+                                        # Process the response (will be handled in next iteration of main loop)
+                                        # Put it back for processing
                                         if move_response.get('type') == 'game_state':
                                             state = move_response['state']
                                             self.display_board(state['board_str'])
@@ -287,11 +299,14 @@ class TicTacToeClient:
                                             # Game ended with this move
                                             print("\n" + "="*50)
                                             if move_response['result'] == 'win':
-                                                winner = move_response['winner']
-                                                if winner == self.player_name:
+                                                winner_symbol = move_response.get('winner_symbol')
+                                                winner_name = move_response['winner']
+                                                if winner_symbol == self.my_symbol:
                                                     print("🎉 CONGRATULATIONS! YOU WON! 🎉")
+                                                    print(f"Winner: {winner_name} ({winner_symbol})")
                                                 else:
-                                                    print(f"Game Over! {winner} won!")
+                                                    print(f"😢 YOU LOST!")
+                                                    print(f"Winner: {winner_name} ({winner_symbol})")
                                             elif move_response['result'] == 'draw':
                                                 print("Game Over! It's a draw!")
                                             print("="*50)
@@ -299,11 +314,11 @@ class TicTacToeClient:
                                             self.in_game = False
                                             self.connected = False
                                             return
-                                break
                             else:
                                 break
                         except ValueError:
                             print("[ERROR] Please enter a valid number")
+                            # Continue loop to ask again
                         except KeyboardInterrupt:
                             print("\n[EXITING] Closing connection...")
                             self.connected = False
@@ -317,25 +332,29 @@ class TicTacToeClient:
                         current_player = state['players'][state['current_player']]
                         print(f"\n[WAITING] Waiting for {current_player[0]}'s move...")
             
+            elif msg_type == 'error':
+                print(f"[ERROR] {response['message']}")
+                # After error, continue waiting for next state (don't break)
+            
             elif msg_type == 'game_end':
-                # Game ended - try to get final board state
+                # Game ended
                 print("\n" + "="*50)
                 if response['result'] == 'win':
-                    winner = response['winner']
-                    if winner == self.player_name:
+                    winner_symbol = response.get('winner_symbol')
+                    winner_name = response['winner']
+                    if winner_symbol == self.my_symbol:
                         print("🎉 CONGRATULATIONS! YOU WON! 🎉")
+                        print(f"Winner: {winner_name} ({winner_symbol})")
                     else:
-                        print(f"Game Over! {winner} won!")
+                        print(f"😢 YOU LOST!")
+                        print(f"Winner: {winner_name} ({winner_symbol})")
                 elif response['result'] == 'draw':
                     print("Game Over! It's a draw!")
                 print("="*50)
                 
                 game_over = True
                 self.in_game = False
-                self.connected = False  # Exit after game ends
-            
-            elif msg_type == 'error':
-                print(f"[ERROR] {response['message']}")
+                self.connected = False
             
             elif msg_type == 'text':
                 # Handle any plain text messages

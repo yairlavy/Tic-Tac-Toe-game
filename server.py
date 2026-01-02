@@ -191,17 +191,24 @@ def send_message(conn, message):
 
 def receive_message(conn):
     """Receive a message from a client"""
+    buffer = ""
     try:
-        data = conn.recv(4096).decode(FORMAT)
-        if data:
-            # Handle delimiter - take first complete message
-            if MESSAGE_DELIMITER in data:
-                data = data.split(MESSAGE_DELIMITER)[0]
-            try:
-                return json.loads(data)
-            except:
-                return data
-        return None
+        while True:
+            data = conn.recv(4096).decode(FORMAT)
+            if not data:
+                return None
+            
+            buffer += data
+            
+            # Check if we have a complete message
+            if MESSAGE_DELIMITER in buffer:
+                parts = buffer.split(MESSAGE_DELIMITER, 1)
+                message = parts[0]
+                
+                try:
+                    return json.loads(message)
+                except:
+                    return message
     except:
         return None
 
@@ -214,7 +221,7 @@ def broadcast_game_state(game):
         msg = {
             'type': 'game_state',
             'state': state,
-            'your_turn': idx == game.current_player_idx,
+            'your_turn': idx == game.current_player_idx and not game.game_over,
             'your_symbol': symbol
         }
         send_message(conn, msg)
@@ -233,24 +240,44 @@ def handle_game_client(conn, addr, game, player_idx):
             
             if isinstance(data, dict) and data.get('type') == 'move':
                 position = data.get('position')
+                
+                # Validate that it's this player's turn
+                if player_idx != game.current_player_idx:
+                    send_message(conn, {
+                        'type': 'error',
+                        'message': 'Not your turn! Please wait.'
+                    })
+                    continue
+                
                 success, result = game.make_move(player_idx, position)
                 
-                if success:
+                if not success:
+                    # Invalid move, send error and let them try again
+                    send_message(conn, {
+                        'type': 'error',
+                        'message': result
+                    })
+                    # Don't broadcast, just let them retry
+                    continue
+                else:
+                    # Valid move, broadcast new state to all players
                     broadcast_game_state(game)
                     
                     if result == "win":
                         winner_name = game.players[game.winner][2]
-                        time.sleep(0.1)  # Small delay to ensure state is received first
+                        winner_symbol = game.players[game.winner][3]
+                        time.sleep(0.1)
                         for p_conn, _, _, _ in game.players:
                             send_message(p_conn, {
                                 'type': 'game_end',
                                 'result': 'win',
-                                'winner': winner_name
+                                'winner': winner_name,
+                                'winner_symbol': winner_symbol
                             })
-                        print(f"[GAME {game.game_id}] Winner: {winner_name}")
+                        print(f"[GAME {game.game_id}] Winner: {winner_name} ({winner_symbol})")
                         break
                     elif result == "draw":
-                        time.sleep(0.1)  # Small delay to ensure state is received first
+                        time.sleep(0.1)
                         for p_conn, _, _, _ in game.players:
                             send_message(p_conn, {
                                 'type': 'game_end',
@@ -258,11 +285,6 @@ def handle_game_client(conn, addr, game, player_idx):
                             })
                         print(f"[GAME {game.game_id}] Draw!")
                         break
-                else:
-                    send_message(conn, {
-                        'type': 'error',
-                        'message': result
-                    })
         
     except Exception as e:
         print(f"[ERROR] Game client handler: {e}")
@@ -297,14 +319,22 @@ def handle_client(conn, addr):
             action = choice.get('action') if isinstance(choice, dict) else choice
             
             if action == '1' or action == 'create':
-                # Create new game
-                send_message(conn, {'type': 'request_players', 'message': 'Enter number of players (2-8):'})
-                num_data = receive_message(conn)
-                num_players = int(num_data.get('num_players', 2)) if isinstance(num_data, dict) else 2
-                
-                if num_players < 2 or num_players > 8:
-                    send_message(conn, {'type': 'error', 'message': 'Invalid number of players'})
-                    continue
+                # Create new game - loop until valid input
+                while True:
+                    send_message(conn, {'type': 'request_players', 'message': 'Enter number of players (2-8):'})
+                    num_data = receive_message(conn)
+                    
+                    if num_data is None:
+                        return  # Client disconnected
+                        
+                    num_players = int(num_data.get('num_players', -1)) if isinstance(num_data, dict) else -1
+                    
+                    if num_players < 2 or num_players > 8:
+                        # Invalid input, ask again (loop continues)
+                        continue
+                    else:
+                        # Valid input, break out of loop
+                        break
                 
                 global game_id_counter
                 with games_lock:
@@ -328,7 +358,11 @@ def handle_client(conn, addr):
                 while not game.game_started:
                     time.sleep(0.5)
                 
-                send_message(conn, {'type': 'game_start', 'message': 'Game starting!'})
+                # Notify all players game is starting
+                for p_conn, _, _, _ in game.players:
+                    send_message(p_conn, {'type': 'game_start', 'message': 'Game starting!'})
+                
+                # Send initial game state ONCE
                 broadcast_game_state(game)
                 
                 # Handle gameplay
@@ -361,52 +395,58 @@ def handle_client(conn, addr):
                 })
                 
             elif action == '3' or action == 'join':
-                # Join existing game
-                send_message(conn, {'type': 'request_game_id', 'message': 'Enter game ID to join:'})
-                gid_data = receive_message(conn)
-                game_id = int(gid_data.get('game_id', -1)) if isinstance(gid_data, dict) else -1
-                
-                with games_lock:
-                    if game_id not in games:
-                        send_message(conn, {'type': 'error', 'message': 'Game not found'})
-                        continue
-                    game = games[game_id]
-                
-                success, result = game.add_player(conn, addr, player_name)
-                
-                if not success:
-                    send_message(conn, {'type': 'error', 'message': result})
-                    continue
-                
-                symbol = result
-                player_idx = len(game.players) - 1
-                
-                send_message(conn, {
-                    'type': 'game_joined',
-                    'game_id': game_id,
-                    'symbol': symbol,
-                    'message': f'Joined game {game_id}! You are {symbol}'
-                })
-                
-                print(f"[GAME {game_id}] {player_name} joined")
-                
-                # Notify all players
-                for p_conn, _, _, _ in game.players:
-                    send_message(p_conn, {
-                        'type': 'player_joined',
-                        'message': f'{player_name} joined the game!'
+                # Join existing game - loop until valid game is joined
+                while True:
+                    send_message(conn, {'type': 'request_game_id', 'message': 'Enter game ID to join:'})
+                    gid_data = receive_message(conn)
+                    
+                    if gid_data is None:
+                        return  # Client disconnected
+                        
+                    game_id = int(gid_data.get('game_id', -1)) if isinstance(gid_data, dict) else -1
+                    
+                    game = None
+                    with games_lock:
+                        if game_id in games:
+                            game = games[game_id]
+                    
+                    if game is None:
+                        send_message(conn, {'type': 'error', 'message': 'Game not found. Please try again.'})
+                        continue  # Ask again
+                    
+                    success, result = game.add_player(conn, addr, player_name)
+                    
+                    if not success:
+                        send_message(conn, {'type': 'error', 'message': f'{result}. Please try again.'})
+                        continue  # Ask again
+                    
+                    # Successfully joined
+                    symbol = result
+                    player_idx = len(game.players) - 1
+                    
+                    send_message(conn, {
+                        'type': 'game_joined',
+                        'game_id': game_id,
+                        'symbol': symbol,
+                        'message': f'Joined game {game_id}! You are {symbol}'
                     })
-                
-                # Wait for game to start
-                while not game.game_started:
-                    time.sleep(0.5)
-                
-                send_message(conn, {'type': 'game_start', 'message': 'Game starting!'})
-                broadcast_game_state(game)
-                
-                # Handle gameplay
-                handle_game_client(conn, addr, game, player_idx)
-                break
+                    
+                    print(f"[GAME {game_id}] {player_name} joined")
+                    
+                    # Notify all players
+                    for p_conn, _, _, _ in game.players:
+                        send_message(p_conn, {
+                            'type': 'player_joined',
+                            'message': f'{player_name} joined the game!'
+                        })
+                    
+                    # Wait for game to start
+                    while not game.game_started:
+                        time.sleep(0.5)
+                    
+                    # Handle gameplay
+                    handle_game_client(conn, addr, game, player_idx)
+                    break  # Exit the join loop after game ends
                 
             elif action == '4' or action == 'exit':
                 send_message(conn, {'type': 'goodbye', 'message': 'Goodbye!'})
